@@ -51,6 +51,9 @@ impl LLMProcessor {
         let full_prompt = format!("{}\n\nUser query: {}\n\nResponse:", system_prompt, query);
 
         let url = format!("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={}", api_key);
+        
+        println!("DEBUG: Calling Gemini API with URL: {}", url);
+        println!("DEBUG: Prompt: {}", &full_prompt[..full_prompt.len().min(200)]);
 
         let response = client
             .post(&url)
@@ -71,6 +74,8 @@ impl LLMProcessor {
             .send()
             .await
             .context("Failed to call Gemini API")?;
+            
+        println!("DEBUG: Gemini response status: {}", response.status());
 
         let response_data: serde_json::Value = response.json().await
             .context("Failed to parse Gemini response")?;
@@ -131,23 +136,46 @@ impl LLMProcessor {
         let response_lower = llm_response.to_lowercase();
         let query_lower = original_query.to_lowercase();
         
-        let tool_result = if (response_lower.contains("weather") || query_lower.contains("weather")) && 
-                              !query_lower.contains("news") && !query_lower.contains("alert") {
-            Some(self.weather.get_weather().await?)
-        } else if (response_lower.contains("news") || query_lower.contains("news") || 
-                   query_lower.contains("headlines")) && 
-                   !query_lower.contains("weather") && !query_lower.contains("alert") {
-            Some(self.news.get_news().await?)
-        } else if (response_lower.contains("alert") || query_lower.contains("alert") || 
-                   query_lower.contains("warning")) && 
-                   !query_lower.contains("weather") && !query_lower.contains("news") {
+        println!("DEBUG: execute_tool_based_on_response called");
+        println!("DEBUG: Original query: '{}'", original_query);
+        println!("DEBUG: LLM response: '{}'", llm_response);
+        
+        // More robust tool selection based primarily on the original query
+        let tool_result = if query_lower.contains("alert") || query_lower.contains("warning") || 
+                              query_lower.contains("emergency") || query_lower.contains("danger") {
+            println!("DEBUG: Calling alerts tool");
             Some(self.alerts.get_alerts().await?)
-        } else if (response_lower.contains("location") || query_lower.contains("location") || 
-                   query_lower.contains("coordinates") || query_lower.contains("where")) && 
-                   !query_lower.contains("weather") && !query_lower.contains("news") && !query_lower.contains("alert") {
+        } else if query_lower.contains("news") || query_lower.contains("headlines") || 
+                   query_lower.contains("latest") || query_lower.contains("breaking") {
+            println!("DEBUG: Calling news tool");
+            Some(self.news.get_news().await?)
+        } else if query_lower.contains("weather") || query_lower.contains("temperature") || 
+                   query_lower.contains("forecast") || query_lower.contains("climate") {
+            println!("DEBUG: Calling weather tool");
+            Some(self.weather.get_weather().await?)
+        } else if query_lower.contains("location") || query_lower.contains("coordinates") || 
+                   query_lower.contains("where") || query_lower.contains("info") {
+            println!("DEBUG: Calling location tool");
             Some(self.location_details.get_location_info().await?)
         } else {
-            None
+            println!("DEBUG: No direct match, checking LLM response for tool hints");
+            // Fallback: check if LLM response mentions any tools
+            if response_lower.contains("weather") || response_lower.contains("get_weather") {
+                println!("DEBUG: LLM mentioned weather, calling weather tool");
+                Some(self.weather.get_weather().await?)
+            } else if response_lower.contains("news") || response_lower.contains("get_news") {
+                println!("DEBUG: LLM mentioned news, calling news tool");
+                Some(self.news.get_news().await?)
+            } else if response_lower.contains("alert") || response_lower.contains("get_alerts") {
+                println!("DEBUG: LLM mentioned alerts, calling alerts tool");
+                Some(self.alerts.get_alerts().await?)
+            } else if response_lower.contains("location") || response_lower.contains("get_location") {
+                println!("DEBUG: LLM mentioned location, calling location tool");
+                Some(self.location_details.get_location_info().await?)
+            } else {
+                println!("DEBUG: No tool called - returning LLM response only");
+                None
+            }
         };
 
         match tool_result {
